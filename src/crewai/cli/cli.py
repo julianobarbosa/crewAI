@@ -1,12 +1,14 @@
 import click
 import pkg_resources
 
+from crewai.cli.create_crew import create_crew
+from crewai.cli.create_pipeline import create_pipeline
 from crewai.memory.storage.kickoff_task_outputs_storage import (
     KickoffTaskOutputsSQLiteStorage,
 )
 
-from .create_crew import create_crew
 from .evaluate_crew import evaluate_crew
+from .install_crew import install_crew
 from .replay_from_task import replay_task_command
 from .reset_memories_command import reset_memories_command
 from .run_crew import run_crew
@@ -19,10 +21,19 @@ def crewai():
 
 
 @crewai.command()
-@click.argument("project_name")
-def create(project_name):
-    """Create a new crew."""
-    create_crew(project_name)
+@click.argument("type", type=click.Choice(["crew", "pipeline"]))
+@click.argument("name")
+@click.option(
+    "--router", is_flag=True, help="Create a pipeline with router functionality"
+)
+def create(type, name, router):
+    """Create a new crew or pipeline."""
+    if type == "crew":
+        create_crew(name)
+    elif type == "pipeline":
+        create_pipeline(name, router)
+    else:
+        click.secho("Error: Invalid type. Must be 'crew' or 'pipeline'.", fg="red")
 
 
 @crewai.command()
@@ -50,10 +61,17 @@ def version(tools):
     default=5,
     help="Number of iterations to train the crew",
 )
-def train(n_iterations: int):
+@click.option(
+    "-f",
+    "--filename",
+    type=str,
+    default="trained_agents_data.pkl",
+    help="Path to a custom file for training",
+)
+def train(n_iterations: int, filename: str):
     """Train the crew."""
-    click.echo(f"Training the crew for {n_iterations} iterations")
-    train_crew(n_iterations)
+    click.echo(f"Training the Crew for {n_iterations} iterations")
+    train_crew(n_iterations, filename)
 
 
 @crewai.command()
@@ -149,9 +167,15 @@ def test(n_iterations: int, model: str):
 
 
 @crewai.command()
+def install():
+    """Install the Crew."""
+    install_crew()
+
+
+@crewai.command()
 def run():
-    """Run the crew."""
-    click.echo("Running the crew")
+    """Run the Crew."""
+    click.echo("Running the Crew")
     run_crew()
 
 
