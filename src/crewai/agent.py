@@ -1,6 +1,7 @@
 import os
-from inspect import signature
-from typing import Any, List, Optional, Union
+import shutil
+import subprocess
+from typing import Any, List, Literal, Optional, Union
 
 from pydantic import Field, InstanceOf, PrivateAttr, model_validator
 
@@ -9,7 +10,8 @@ from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.agents.crew_agent_executor import CrewAgentExecutor
 from crewai.llm import LLM
 from crewai.memory.contextual.contextual_memory import ContextualMemory
-from crewai.tools.agent_tools import AgentTools
+from crewai.tools.agent_tools.agent_tools import AgentTools
+from crewai.tools import BaseTool
 from crewai.utilities import Converter, Prompts
 from crewai.utilities.constants import TRAINED_AGENTS_DATA_FILE, TRAINING_DATA_FILE
 from crewai.utilities.token_counter_callback import TokenCalcHandler
@@ -112,6 +114,10 @@ class Agent(BaseAgent):
         default=2,
         description="Maximum number of retries for an agent to execute a task when an error occurs.",
     )
+    code_execution_mode: Literal["safe", "unsafe"] = Field(
+        default="safe",
+        description="Mode for code execution: 'safe' (using Docker) or 'unsafe' (direct execution).",
+    )
 
     @model_validator(mode="after")
     def post_init_setup(self):
@@ -173,6 +179,9 @@ class Agent(BaseAgent):
         if not self.agent_executor:
             self._setup_agent_executor()
 
+        if self.allow_code_execution:
+            self._validate_docker_installation()
+
         return self
 
     def _setup_agent_executor(self):
@@ -184,7 +193,7 @@ class Agent(BaseAgent):
         self,
         task: Any,
         context: Optional[str] = None,
-        tools: Optional[List[Any]] = None,
+        tools: Optional[List[BaseTool]] = None,
     ) -> str:
         """Execute a task with the agent.
 
@@ -251,7 +260,9 @@ class Agent(BaseAgent):
 
         return result
 
-    def create_agent_executor(self, tools=None, task=None) -> None:
+    def create_agent_executor(
+        self, tools: Optional[List[BaseTool]] = None, task=None
+    ) -> None:
         """Create an agent executor for the agent.
 
         Returns:
@@ -308,7 +319,9 @@ class Agent(BaseAgent):
         try:
             from crewai_tools import CodeInterpreterTool
 
-            return [CodeInterpreterTool()]
+            # Set the unsafe_mode based on the code_execution_mode attribute
+            unsafe_mode = self.code_execution_mode == "unsafe"
+            return [CodeInterpreterTool(unsafe_mode=unsafe_mode)]
         except ModuleNotFoundError:
             self._logger.log(
                 "info", "Coding tools not available. Install crewai_tools. "
@@ -322,7 +335,7 @@ class Agent(BaseAgent):
         tools_list = []
         try:
             # tentatively try to import from crewai_tools import BaseTool as CrewAITool
-            from crewai_tools import BaseTool as CrewAITool
+            from crewai.tools import BaseTool as CrewAITool
 
             for tool in tools:
                 if isinstance(tool, CrewAITool):
@@ -381,32 +394,41 @@ class Agent(BaseAgent):
 
         return description
 
-    def _render_text_description_and_args(self, tools: List[Any]) -> str:
+    def _render_text_description_and_args(self, tools: List[BaseTool]) -> str:
         """Render the tool name, description, and args in plain text.
 
-        Output will be in the format of:
+            Output will be in the format of:
 
-        .. code-block:: markdown
+            .. code-block:: markdown
 
             search: This tool is used for search, args: {"query": {"type": "string"}}
             calculator: This tool is used for math, \
-    args: {"expression": {"type": "string"}}
+            args: {"expression": {"type": "string"}}
         """
         tool_strings = []
         for tool in tools:
-            args_schema = str(tool.args)
-            if hasattr(tool, "func") and tool.func:
-                sig = signature(tool.func)
-                description = (
-                    f"Tool Name: {tool.name}{sig}\nTool Description: {tool.description}"
-                )
-            else:
-                description = (
-                    f"Tool Name: {tool.name}\nTool Description: {tool.description}"
-                )
-            tool_strings.append(f"{description}\nTool Arguments: {args_schema}")
+            tool_strings.append(tool.description)
 
         return "\n".join(tool_strings)
+
+    def _validate_docker_installation(self) -> None:
+        """Check if Docker is installed and running."""
+        if not shutil.which("docker"):
+            raise RuntimeError(
+                f"Docker is not installed. Please install Docker to use code execution with agent: {self.role}"
+            )
+
+        try:
+            subprocess.run(
+                ["docker", "info"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except subprocess.CalledProcessError:
+            raise RuntimeError(
+                f"Docker is not running. Please start Docker to use code execution with agent: {self.role}"
+            )
 
     @staticmethod
     def __tools_names(tools) -> str:
